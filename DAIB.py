@@ -67,6 +67,11 @@ user_permissions = {}
 BOT_PERSONALITY = "You are XBot. No AI assistant behavior. No roleplay actions."
 PERSONALITY_FILE = "personality.json"
 
+# Channel IDs for specific features
+ABILITIES_SHOP_CHANNEL_ID = 1517627115208441916  # !shop channel
+ROLES_SHOP_CHANNEL_ID = 1517627756907593738     # !buyrole channel
+TRADE_CHANNEL_ID = 1517627548173861074          # !trade channel
+
 # Load all persistent data
 def load_all_data():
     global role_shop, user_inventory, user_trade_settings, user_wallets, user_permissions, user_limits, tradeable_roles, sellable_roles, BOT_PERSONALITY
@@ -544,10 +549,104 @@ def start_bot():
             return
 
         # ===================================================
-        # ROLE SHOP SYSTEM
+        # ABILITIES SHOP SYSTEM - Only in designated channel
+        # ===================================================
+
+        if content_lower == "!shop":
+            if message.channel.id != ABILITIES_SHOP_CHANNEL_ID:
+                await message.reply(f"❌ The abilities shop can only be accessed in <#{ABILITIES_SHOP_CHANNEL_ID}>")
+                return
+            
+            await message.reply(
+                "🛒 **BART'S MARKETPLACE** 🛒\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🔹 `!buy limit` | **Cost: 50 Coins**\n"
+                "   ↳ Extends your chat limit by +15 messages.\n\n"
+                "🔹 `!buy vc` | **Cost: 100 Coins**\n"
+                "   ↳ Unlock the ability to command: `bart join the vc`.\n\n"
+                "🔹 `!buy stealth` | **Cost: 250 Coins**\n"
+                "   ↳ Permanent immunity from limit checks!\n\n"
+                "🔹 `!buy friendship` | **Cost: 500 Coins**\n"
+                "   ↳ Bart treats you as a close companion.\n\n"
+                "🔹 `!buy ultimate` | **Cost: 1000 Coins**\n"
+                "   ↳ Boost your limit to 100 instantly.\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "*Type the exact phrase to purchase!*"
+            )
+            return
+
+        if content_lower.startswith("!buy "):
+            if message.channel.id != ABILITIES_SHOP_CHANNEL_ID:
+                await message.reply(f"❌ The abilities shop can only be accessed in <#{ABILITIES_SHOP_CHANNEL_ID}>")
+                return
+            
+            item = content_lower[5:].strip()
+            coins = get_coins(uid)
+
+            shop_catalog = {
+                "limit": 50,
+                "vc": 100,
+                "stealth": 250,
+                "friendship": 500,
+                "ultimate": 1000
+            }
+
+            if item not in shop_catalog:
+                await message.reply("💀 That item doesn't exist. Use `!shop`.")
+                return
+
+            cost = shop_catalog[item]
+            if coins < cost:
+                await message.reply(f"❌ Not enough coins! Need **{cost}**, you have **{coins}**.")
+                return
+
+            if item == "limit":
+                user_limits[uid] = user_limits.get(uid, DEFAULT_LIMIT) + 15
+                add_coins(uid, -cost)
+                save_economy()
+                await message.reply(f"✅ Spent {cost} Coins. Limit increased by +15!")
+            
+            elif item == "vc":
+                if check_permission(uid, "vc_access"):
+                    await message.reply("❌ You already have VC access!")
+                    return
+                grant_permission(uid, "vc_access", True)
+                add_coins(uid, -cost)
+                await message.reply(f"✅ Spent {cost} Coins. You can now command `bart join the vc`.")
+
+            elif item == "stealth":
+                if check_permission(uid, "stealth_pass"):
+                    await message.reply("❌ You already have Stealth Pass!")
+                    return
+                grant_permission(uid, "stealth_pass", True)
+                add_coins(uid, -cost)
+                await message.reply(f"✅ Spent {cost} Coins! Your account now has zero limit drain.")
+
+            elif item == "friendship":
+                if check_permission(uid, "friendship"):
+                    await message.reply("❌ We are already homies!")
+                    return
+                grant_permission(uid, "friendship", True)
+                add_coins(uid, -cost)
+                await message.reply(f"✅ Spent {cost} Coins. We are officially tight now.")
+
+            elif item == "ultimate":
+                user_limits[uid] = 100
+                add_coins(uid, -cost)
+                save_economy()
+                await message.reply(f"✅ Spent {cost} Coins. Your limit is now **100**!")
+
+            return
+
+        # ===================================================
+        # ROLE SHOP SYSTEM - Only in designated channel
         # ===================================================
 
         if content_lower == "!buyrole":
+            if message.channel.id != ROLES_SHOP_CHANNEL_ID:
+                await message.reply(f"❌ The roles shop can only be accessed in <#{ROLES_SHOP_CHANNEL_ID}>")
+                return
+            
             if not role_shop:
                 await message.reply("❌ No roles available for purchase.")
                 return
@@ -562,49 +661,51 @@ def start_bot():
             return
 
         if content_lower.startswith("!buy "):
+            # Check if this is a role purchase
             code = content[5:].strip()
-            if code not in role_shop:
-                await message.reply(f"❌ Role code `{code}` not found.")
-                return
+            if code in role_shop:
+                if message.channel.id != ROLES_SHOP_CHANNEL_ID:
+                    await message.reply(f"❌ Role purchases can only be made in <#{ROLES_SHOP_CHANNEL_ID}>")
+                    return
+                
+                role_info = role_shop[code]
+                price = role_info["price"]
+                role_id = role_info["role_id"]
+                coins = get_coins(uid)
 
-            role_info = role_shop[code]
-            price = role_info["price"]
-            role_id = role_info["role_id"]
-            coins = get_coins(uid)
-
-            if coins < price:
-                await message.reply(f"❌ Not enough coins! Need **{price}**, you have **{coins}**.")
-                return
-
-            if uid not in user_inventory:
-                user_inventory[uid] = {}
-
-            if code in user_inventory[uid]:
-                await message.reply(f"❌ You already own **{role_info['role_name']}**!")
-                return
-
-            try:
-                member = message.guild.get_member(uid)
-                if not member:
-                    await message.reply("❌ Error: Could not find you in the server.")
+                if coins < price:
+                    await message.reply(f"❌ Not enough coins! Need **{price}**, you have **{coins}**.")
                     return
 
-                role = message.guild.get_role(role_id)
-                if not role:
-                    await message.reply("❌ Error: Role not found in server.")
+                if uid not in user_inventory:
+                    user_inventory[uid] = {}
+
+                if code in user_inventory[uid]:
+                    await message.reply(f"❌ You already own **{role_info['role_name']}**!")
                     return
 
-                await member.add_roles(role, reason="Purchased from shop")
-                user_inventory[uid][code] = role_info.copy()
-                add_coins(uid, -price)
-                save_user_inventory()
+                try:
+                    member = message.guild.get_member(uid)
+                    if not member:
+                        await message.reply("❌ Error: Could not find you in the server.")
+                        return
 
-                await message.reply(f"✅ You purchased **{role_info['role_name']}** for **{price} Coins**! The role has been assigned to you.")
-            except discord.Forbidden:
-                await message.reply("❌ Permission Error: I don't have permission to assign roles.")
-            except Exception as e:
-                await message.reply(f"❌ Error: {str(e)}")
-            return
+                    role = message.guild.get_role(role_id)
+                    if not role:
+                        await message.reply("❌ Error: Role not found in server.")
+                        return
+
+                    await member.add_roles(role, reason="Purchased from shop")
+                    user_inventory[uid][code] = role_info.copy()
+                    add_coins(uid, -price)
+                    save_user_inventory()
+
+                    await message.reply(f"✅ You purchased **{role_info['role_name']}** for **{price} Coins**! The role has been assigned to you.")
+                except discord.Forbidden:
+                    await message.reply("❌ Permission Error: I don't have permission to assign roles.")
+                except Exception as e:
+                    await message.reply(f"❌ Error: {str(e)}")
+                return
 
         # ===================================================
         # SELLABLE ROLES SYSTEM
@@ -696,10 +797,14 @@ def start_bot():
             return
 
         # ===================================================
-        # TRADING SYSTEM - MULTIPLE ROLES & COINS
+        # TRADING SYSTEM - MULTIPLE ROLES & COINS - Only in designated channel
         # ===================================================
 
         if content_lower.startswith("!trade"):
+            if message.channel.id != TRADE_CHANNEL_ID:
+                await message.reply(f"❌ Trading can only be done in <#{TRADE_CHANNEL_ID}>")
+                return
+            
             if not message.mentions:
                 await message.reply("⚠️ Usage: `!trade @user`")
                 return
@@ -904,84 +1009,6 @@ def start_bot():
                 f"📉 Chat Limit Left: **{current_bal}**\n"
                 f"🕶️ Stealth Pass: **{stealth_perk}**"
             )
-            return
-
-        if content_lower == "!shop":
-            await message.reply(
-                "🛒 **BART'S MARKETPLACE** 🛒\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "🔹 `!buy limit` | **Cost: 50 Coins**\n"
-                "   ↳ Extends your chat limit by +15 messages.\n\n"
-                "🔹 `!buy vc` | **Cost: 100 Coins**\n"
-                "   ↳ Unlock the ability to command: `bart join the vc`.\n\n"
-                "🔹 `!buy stealth` | **Cost: 250 Coins**\n"
-                "   ↳ Permanent immunity from limit checks!\n\n"
-                "🔹 `!buy friendship` | **Cost: 500 Coins**\n"
-                "   ↳ Bart treats you as a close companion.\n\n"
-                "🔹 `!buy ultimate` | **Cost: 1000 Coins**\n"
-                "   ↳ Boost your limit to 100 instantly.\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "*Type the exact phrase to purchase!*"
-            )
-            return
-
-        if content_lower.startswith("!buy "):
-            item = content_lower[5:].strip()
-            coins = get_coins(uid)
-
-            shop_catalog = {
-                "limit": 50,
-                "vc": 100,
-                "stealth": 250,
-                "friendship": 500,
-                "ultimate": 1000
-            }
-
-            if item not in shop_catalog:
-                await message.reply("💀 That item doesn't exist. Use `!shop`.")
-                return
-
-            cost = shop_catalog[item]
-            if coins < cost:
-                await message.reply(f"❌ Not enough coins! Need **{cost}**, you have **{coins}**.")
-                return
-
-            if item == "limit":
-                user_limits[uid] = user_limits.get(uid, DEFAULT_LIMIT) + 15
-                add_coins(uid, -cost)
-                save_economy()
-                await message.reply(f"✅ Spent {cost} Coins. Limit increased by +15!")
-            
-            elif item == "vc":
-                if check_permission(uid, "vc_access"):
-                    await message.reply("❌ You already have VC access!")
-                    return
-                grant_permission(uid, "vc_access", True)
-                add_coins(uid, -cost)
-                await message.reply(f"✅ Spent {cost} Coins. You can now command `bart join the vc`.")
-
-            elif item == "stealth":
-                if check_permission(uid, "stealth_pass"):
-                    await message.reply("❌ You already have Stealth Pass!")
-                    return
-                grant_permission(uid, "stealth_pass", True)
-                add_coins(uid, -cost)
-                await message.reply(f"✅ Spent {cost} Coins! Your account now has zero limit drain.")
-
-            elif item == "friendship":
-                if check_permission(uid, "friendship"):
-                    await message.reply("❌ We are already homies!")
-                    return
-                grant_permission(uid, "friendship", True)
-                add_coins(uid, -cost)
-                await message.reply(f"✅ Spent {cost} Coins. We are officially tight now.")
-
-            elif item == "ultimate":
-                user_limits[uid] = 100
-                add_coins(uid, -cost)
-                save_economy()
-                await message.reply(f"✅ Spent {cost} Coins. Your limit is now **100**!")
-
             return
 
         if LAST_CHANNEL.id not in channel_active_users:
