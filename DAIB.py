@@ -698,10 +698,14 @@ def start_bot():
                 return
 
         # ===================================================
-        # SELLABLE ROLES SYSTEM
+        # SELLABLE ROLES SYSTEM - Only in designated channel
         # ===================================================
 
         if content_lower == "!sellroles":
+            if message.channel.id != ROLES_SHOP_CHANNEL_ID:
+                await message.reply(f"❌ Role selling can only be done in <#{ROLES_SHOP_CHANNEL_ID}>")
+                return
+
             if uid not in user_inventory or not user_inventory[uid]:
                 await message.reply("❌ Your inventory is empty.")
                 return
@@ -726,6 +730,10 @@ def start_bot():
             return
 
         if content_lower.startswith("!sell "):
+            if message.channel.id != ROLES_SHOP_CHANNEL_ID:
+                await message.reply(f"❌ Role selling can only be done in <#{ROLES_SHOP_CHANNEL_ID}>")
+                return
+
             code = content[6:].strip()
             
             if uid not in user_inventory or code not in user_inventory[uid]:
