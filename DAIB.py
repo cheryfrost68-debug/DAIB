@@ -515,17 +515,7 @@ def start_bot():
             return
 
         # ===================================================
-        # MAIN CHANNEL ONLY (Skip DMs from here on)
-        # ===================================================
-        if message.channel.id != TARGET_CHANNEL_ID:
-            return
-
-        LAST_CHANNEL = message.channel
-        if hasattr(message.author, 'voice'):
-            LAST_USER_VOICE_STATE = message.author.voice
-
-        # ===================================================
-        # SETTINGS COMMAND
+        # SETTINGS COMMAND (works in any channel)
         # ===================================================
         if content_lower == "!settings":
             settings_msg = (
@@ -1010,6 +1000,16 @@ def start_bot():
                 f"🕶️ Stealth Pass: **{stealth_perk}**"
             )
             return
+
+        # ===================================================
+        # MAIN CHANNEL ONLY CHECK (Now AFTER command handling)
+        # ===================================================
+        if message.channel.id != TARGET_CHANNEL_ID:
+            return
+
+        LAST_CHANNEL = message.channel
+        if hasattr(message.author, 'voice'):
+            LAST_USER_VOICE_STATE = message.author.voice
 
         if LAST_CHANNEL.id not in channel_active_users:
             channel_active_users[LAST_CHANNEL.id] = []
