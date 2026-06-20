@@ -424,8 +424,6 @@ def start_bot():
 
                     initiator = guild.get_member(trade_data["initiator_id"])
                     target_member = guild.get_member(target_id)
-                    take_role = guild.get_role(trade_data["take_role_id"])
-                    give_role = guild.get_role(trade_data["give_role_id"])
 
                     if content_lower == "!decline":
                         await message.reply("🛑 You declined the trade.")
@@ -438,36 +436,68 @@ def start_bot():
                         del active_trades[target_id]
                         return
 
-                    if not initiator or not target_member or not take_role or not give_role:
+                    if not initiator or not target_member:
                         await message.reply("❌ Error: Trade data invalid.")
                         del active_trades[target_id]
                         return
 
                     try:
-                        # Execute role swap
-                        await target_member.remove_roles(take_role, reason="Trade executed.")
-                        await target_member.add_roles(give_role, reason="Trade executed.")
+                        # Execute role swaps for ALL roles being traded
+                        take_role_ids = trade_data.get("take_role_ids", [])
+                        give_role_ids = trade_data.get("give_role_ids", [])
                         
-                        await initiator.remove_roles(give_role, reason="Trade executed.")
-                        await initiator.add_roles(take_role, reason="Trade executed.")
+                        # Remove taken roles from target, add to initiator
+                        for role_id in take_role_ids:
+                            role = guild.get_role(role_id)
+                            if role:
+                                await target_member.remove_roles(role, reason="Trade executed.")
+                                await initiator.add_roles(role, reason="Trade executed.")
+                        
+                        # Remove given roles from initiator, add to target
+                        for role_id in give_role_ids:
+                            role = guild.get_role(role_id)
+                            if role:
+                                await initiator.remove_roles(role, reason="Trade executed.")
+                                await target_member.add_roles(role, reason="Trade executed.")
 
-                        # Handle coin transfer if applicable
-                        if trade_data.get("coin_transfer", 0) > 0:
-                            if trade_data.get("coin_direction") == "to_target":
-                                add_coins(target_id, trade_data["coin_transfer"])
-                                add_coins(trade_data["initiator_id"], -trade_data["coin_transfer"])
+                        # Handle coin transfer
+                        coin_amount = trade_data.get("coin_amount", 0)
+                        if coin_amount > 0:
+                            coin_direction = trade_data.get("coin_direction", "to_target")
+                            if coin_direction == "to_target":
+                                add_coins(target_id, coin_amount)
+                                add_coins(trade_data["initiator_id"], -coin_amount)
                             else:
-                                add_coins(trade_data["initiator_id"], trade_data["coin_transfer"])
-                                add_coins(target_id, -trade_data["coin_transfer"])
+                                add_coins(trade_data["initiator_id"], coin_amount)
+                                add_coins(target_id, -coin_amount)
 
-                        await message.reply(f"✅ Trade complete! You got **{take_role.name}**!")
+                        take_role_names = trade_data.get("take_role_names", [])
+                        give_role_names = trade_data.get("give_role_names", [])
+                        
+                        confirmation_msg = f"✅ Trade complete!"
+                        if take_role_names:
+                            confirmation_msg += f" You got **{', '.join(take_role_names)}**"
+                        if coin_amount > 0:
+                            if coin_direction == "to_target":
+                                confirmation_msg += f" and **{coin_amount} Coins**"
+                            confirmation_msg += "!"
+                        else:
+                            confirmation_msg += "!"
+                        
+                        await message.reply(confirmation_msg)
                         
                         try:
-                            await initiator.send(f"🎉 Trade approved! You got **{give_role.name}**!")
+                            initiator_msg = f"🎉 Trade approved!"
+                            if give_role_names:
+                                initiator_msg += f" You got **{', '.join(give_role_names)}**"
+                            if coin_amount > 0 and coin_direction == "to_initiator":
+                                initiator_msg += f" and **{coin_amount} Coins**"
+                            initiator_msg += "!"
+                            await initiator.send(initiator_msg)
                         except: pass
                         
                         if origin_channel:
-                            await origin_channel.send(f"🤝 **Trade Complete!** <@{initiator.id}> and <@{target_member.id}> swapped roles!")
+                            await origin_channel.send(f"🤝 **Trade Complete!** <@{initiator.id}> and <@{target_member.id}> swapped roles and items!")
                     
                     except discord.Forbidden:
                         await message.reply("❌ Permission Error: I can't modify roles.")
@@ -666,7 +696,7 @@ def start_bot():
             return
 
         # ===================================================
-        # TRADING SYSTEM - TRADEABLE ROLES (Using Codes)
+        # TRADING SYSTEM - MULTIPLE ROLES & COINS
         # ===================================================
 
         if content_lower.startswith("!trade"):
@@ -697,9 +727,9 @@ def start_bot():
             pending_takes[uid] = {"target_member": target_member, "guild": message.guild, "tradeable_roles": target_tradeable_roles}
             
             await message.reply(
-                f"**Choose a role to take** from **{target_member.display_name}**:\n"
+                f"**Choose role(s) to take** from **{target_member.display_name}**:\n"
                 f"{roles_list_str}\n\n"
-                f"*Type `!take <code>` to proceed.*"
+                f"*Type `!take <code1> <code2> ...` to select multiple roles (space-separated).*"
             )
             return
 
@@ -708,24 +738,26 @@ def start_bot():
                 await message.reply("❌ Run `!trade @user` first.")
                 return
 
-            code_query = content[6:].strip().upper()
+            code_queries = content[6:].strip().upper().split()
             trade_context = pending_takes[uid]
             target_member = trade_context["target_member"]
             guild = trade_context["guild"]
             tradeable_roles_list = trade_context["tradeable_roles"]
 
-            matched_code = None
-            matched_role = None
-            matched_info = None
-            for code, role, info in tradeable_roles_list:
-                if code.upper() == code_query:
-                    matched_code = code
-                    matched_role = role
-                    matched_info = info
-                    break
+            matched_codes = []
+            matched_roles = []
+            matched_infos = []
+            
+            for code_query in code_queries:
+                for code, role, info in tradeable_roles_list:
+                    if code.upper() == code_query and code not in matched_codes:
+                        matched_codes.append(code)
+                        matched_roles.append(role)
+                        matched_infos.append(info)
+                        break
 
-            if not matched_code:
-                await message.reply(f"❌ Code not found. Choose from the codes displayed above.")
+            if not matched_codes:
+                await message.reply(f"❌ No valid role codes found.")
                 return
 
             initiator_member = guild.get_member(uid)
@@ -748,20 +780,23 @@ def start_bot():
                 return
 
             my_roles_str = "\n".join([f"• `{code}` - {info['role_name']}" for code, role, info in my_tradeable_roles])
+            matched_info_str = ", ".join([f"`{info['role_name']}`" for info in matched_infos])
+            
             pending_gives[uid] = {
                 "target_member": target_member,
                 "guild": guild,
-                "take_role": matched_role,
-                "take_code": matched_code,
+                "take_roles": matched_roles,
+                "take_codes": matched_codes,
+                "take_infos": matched_infos,
                 "my_tradeable_roles": my_tradeable_roles
             }
             del pending_takes[uid]
 
             await message.reply(
-                f"🔒 Selected: **{matched_info['role_name']}**.\n"
-                f"**What will you give?** Pick one of your tradeable roles:\n"
+                f"🔒 Selected: **{matched_info_str}**.\n"
+                f"**What will you give?** Pick one or more of your tradeable roles, and optionally coins:\n"
                 f"{my_roles_str}\n\n"
-                f"*Type `!give <code>` to proceed.*"
+                f"*Type `!give <code1> <code2> ... [+coins]` (e.g., `!give 001 002 +50` for roles + 50 coins).*"
             )
             return
 
@@ -770,48 +805,85 @@ def start_bot():
                 await message.reply("❌ Run `!trade @user` first.")
                 return
 
-            code_query = content[6:].strip().upper()
+            give_input = content[6:].strip()
             context = pending_gives[uid]
             target_member = context["target_member"]
             guild = context["guild"]
-            take_role = context["take_role"]
-            take_code = context["take_code"]
+            take_roles = context["take_roles"]
+            take_codes = context["take_codes"]
+            take_infos = context["take_infos"]
             my_tradeable_roles = context["my_tradeable_roles"]
 
-            matched_give_code = None
-            matched_give_role = None
-            matched_give_info = None
-            for code, role, info in my_tradeable_roles:
-                if code.upper() == code_query:
-                    matched_give_code = code
-                    matched_give_role = role
-                    matched_give_info = info
-                    break
+            # Parse coins if present (e.g., "001 002 +50")
+            coin_amount = 0
+            coin_direction = "to_target"  # by default, coins go to target
+            code_queries = []
+            parts = give_input.split()
+            
+            for part in parts:
+                if part.startswith("+"):
+                    try:
+                        coin_amount = int(part[1:])
+                    except:
+                        pass
+                else:
+                    code_queries.append(part.upper())
 
-            if not matched_give_code:
-                await message.reply("❌ Code not found. Choose from the codes displayed above.")
+            matched_give_codes = []
+            matched_give_roles = []
+            matched_give_infos = []
+            
+            for code_query in code_queries:
+                for code, role, info in my_tradeable_roles:
+                    if code.upper() == code_query and code not in matched_give_codes:
+                        matched_give_codes.append(code)
+                        matched_give_roles.append(role)
+                        matched_give_infos.append(info)
+                        break
+
+            if not matched_give_codes and coin_amount == 0:
+                await message.reply("❌ You must provide at least one role code or coins to trade.")
                 return
+
+            # Validate coins
+            if coin_amount > 0:
+                user_coins = get_coins(uid)
+                if user_coins < coin_amount:
+                    await message.reply(f"❌ Not enough coins! You have **{user_coins}** but trying to give **{coin_amount}**.")
+                    return
 
             # Send trade proposal to target
             initiator_member = guild.get_member(uid)
+            
+            take_role_names = [info['role_name'] for info in take_infos]
+            give_role_names = [info['role_name'] for info in matched_give_infos] if matched_give_infos else []
+            
             active_trades[target_member.id] = {
                 "initiator_id": uid,
                 "channel_id": message.channel.id,
-                "take_role_id": take_role.id,
-                "take_role_name": take_role.name,
-                "give_role_id": matched_give_role.id,
-                "give_role_name": matched_give_role.name,
-                "guild_id": guild.id
+                "take_role_ids": [r.id for r in take_roles],
+                "take_role_names": take_role_names,
+                "give_role_ids": [r.id for r in matched_give_roles],
+                "give_role_names": give_role_names,
+                "guild_id": guild.id,
+                "coin_amount": coin_amount,
+                "coin_direction": coin_direction
             }
             del pending_gives[uid]
+
+            # Build trade summary for DM
+            trade_summary = f"📤 They will **TAKE**: {', '.join([f'`{name}`' for name in take_role_names])}\n"
+            if give_role_names:
+                trade_summary += f"📥 They will **GIVE**: {', '.join([f'`{name}`' for name in give_role_names])}\n"
+            if coin_amount > 0:
+                trade_summary += f"💰 They will **GIVE**: **+{coin_amount} Coins**\n"
 
             try:
                 await target_member.send(
                     f"🔔 **Incoming Role Trade Request!**\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"👤 **{initiator_member.display_name}** wants to trade with you.\n\n"
-                    f"📤 They will **TAKE**: `{take_role.name}`\n"
-                    f"📥 They will **GIVE**: `{matched_give_role.name}`\n"
+                    f"{trade_summary}"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"👉 *Type `!agree` to confirm, or `!decline` to cancel.*"
                 )
